@@ -31,6 +31,44 @@ module Rack
     # sequence.
     class InvalidParameterError < ArgumentError; end
 
+    # QueryLimitError is for errors raised when the query provided exceeds one
+    # of the query parser limits.
+    class QueryLimitError < RangeError
+    end
+
+    def env_int(key, val)
+      if str_val = ENV[key]
+        begin
+          val = Integer(str_val, 10)
+        rescue ArgumentError
+          raise ArgumentError, "non-integer value provided for environment variable #{key}"
+        end
+      end
+
+      val
+    end
+    module_function :env_int
+
+    BYTESIZE_LIMIT = env_int("RACK_QUERY_PARSER_BYTESIZE_LIMIT", 4194304)
+    PARAMS_LIMIT = env_int("RACK_QUERY_PARSER_PARAMS_LIMIT", 4096)
+
+    def check_query_string(qs, sep)
+      if qs
+        if qs.bytesize > BYTESIZE_LIMIT
+          raise QueryLimitError, "total query size (#{qs.bytesize}) exceeds limit (#{BYTESIZE_LIMIT})"
+        end
+
+        if (param_count = qs.count(sep.is_a?(String) ? sep : '&')) >= PARAMS_LIMIT
+          raise QueryLimitError, "total number of query parameters (#{param_count+1}) exceeds limit (#{PARAMS_LIMIT})"
+        end
+
+        qs
+      else
+        ''
+      end
+    end
+    module_function :check_query_string
+
     # URI escapes. (CGI style space to +)
     def escape(s)
       URI.encode_www_form_component(s)
@@ -89,7 +127,7 @@ module Rack
 
       params = KeySpaceConstrainedParams.new
 
-      (qs || '').split(d ? /[#{d}] */n : DEFAULT_SEP).each do |p|
+      check_query_string(qs, d).split(d ? /[#{d}] */n : DEFAULT_SEP).each do |p|
         next if p.empty?
         k, v = p.split('=', 2).map(&unescaper)
 
@@ -116,7 +154,7 @@ module Rack
     def parse_nested_query(qs, d = nil)
       params = KeySpaceConstrainedParams.new
 
-      (qs || '').split(d ? /[#{d}] */n : DEFAULT_SEP).each do |p|
+      check_query_string(qs, d).split(d ? /[#{d}] */n : DEFAULT_SEP).each do |p|
         k, v = p.split('=', 2).map { |s| unescape(s) }
 
         normalize_params(params, k, v)
